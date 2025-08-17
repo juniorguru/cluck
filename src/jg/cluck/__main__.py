@@ -148,8 +148,8 @@ def find_device_index_by_name(
 def start_recording(
     ffmpeg_path: str, output_dir: Path, device_index: int, label: str, stop_event: Event
 ) -> tuple[Thread, Path]:
-    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    filename = f"record-discord-{label}-{ts}.m4a"
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    filename = f"record-discord-{label}-{timestamp}.m4a"
     path = output_dir / filename
     thread = Thread(
         target=_record_thread,
@@ -165,7 +165,10 @@ def stop_all(threads: list[Thread]) -> None:
         try:
             thread.join(timeout=5)
         except Exception:
-            pass
+            console.log(
+                f"Failed to join thread {getattr(thread, 'name', repr(thread))}"
+            )
+            console.print_exception()
 
 
 def main() -> None:
@@ -177,7 +180,6 @@ def main() -> None:
 
     signal.signal(signal.SIGINT, _signal_handler)
 
-    # ensure ffmpeg exists (fail fast)
     ffmpeg_path = shutil.which("ffmpeg")
     if not ffmpeg_path:
         console.print(
@@ -185,7 +187,6 @@ def main() -> None:
         )
         sys.exit(1)
 
-    # list ffmpeg's avfoundation audio devices for diagnostics
     raw_output = run_ffmpeg_list_devices(ffmpeg_path)
     ffmpeg_devices = parse_avfoundation_device_list(raw_output)
     if ffmpeg_devices:
@@ -198,7 +199,6 @@ def main() -> None:
     threads: list[Thread] = []
     paths: list[Path] = []
 
-    # Prepare output directory once and reuse for all recordings
     output_dir = Path.home() / "Downloads"
     output_dir.mkdir(parents=True, exist_ok=True)
 
