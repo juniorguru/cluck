@@ -1,5 +1,5 @@
-import os
 import signal
+from pathlib import Path
 import time
 from datetime import datetime
 from threading import Thread
@@ -24,12 +24,12 @@ def get_device_index(name) -> int | None:
     return None
 
 
-def start_recording(device_index, label) -> tuple[Thread, str]:
+def start_recording(device_index, label) -> tuple[Thread, Path]:
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    outdir = os.path.expanduser("~/Downloads")
-    os.makedirs(outdir, exist_ok=True)
+    outdir = Path.home() / "Downloads"
+    outdir.mkdir(parents=True, exist_ok=True)
     filename = f"record-discord-{label}-{ts}.flac"
-    path = os.path.join(outdir, filename)
+    path = outdir / filename
 
     def _rec_thread(path: str, device_index: int):
         samplerate = 44100
