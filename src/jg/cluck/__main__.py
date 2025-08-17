@@ -21,36 +21,51 @@ DEVICES_MAPPING = [
 
 
 def _record_thread(
-    ffmpeg_path: str, path: Path, device_index: int, stop_event: Event, label: str
+    ffmpeg_path: str,
+    path: Path,
+    device_index: int,
+    stop_event: Event,
+    label: str,
 ) -> None:
-    out_path = str(path.with_suffix(".m4a"))
-    # Increase input queue size to reduce risk of buffer underruns/clicks
-    # and force a stable sample rate / channel count to avoid resampling artifacts.
+    # Record ADTS AAC (.aac); ADTS is streamable and can often be
+    # played even when the file is truncated.
+    out_aac = str(path.with_suffix(".aac"))
+    log_path = str(path.with_suffix(".ffmpeg.log"))
+
     ffmpeg_cmd = [
         ffmpeg_path,
         "-y",
         "-thread_queue_size",
         "4096",
+        "-flush_packets",
+        "1",
         "-f",
         "avfoundation",
         "-i",
         f":{device_index}",
-        "-ar",
-        "48000",
-        "-ac",
-        "2",
+        "-map",
+        "0:a",
         "-c:a",
         "aac",
         "-b:a",
         "128k",
-        out_path,
+        "-f",
+        "adts",
+        out_aac,
     ]
     console.log(" ".join(ffmpeg_cmd))
+
     # Keep stdin open so we can send the "q" command to let ffmpeg finish
     # cleanly (preferred over forcing SIGINT/terminate which may truncate frames).
+    stderr_f = None
+    try:
+        stderr_f = open(log_path, "ab")
+    except Exception:
+        stderr_f = subprocess.DEVNULL
+
     proc = subprocess.Popen(
         ffmpeg_cmd,
-        stderr=subprocess.DEVNULL,
+        stderr=stderr_f,
         stdout=subprocess.DEVNULL,
         stdin=subprocess.PIPE,
         start_new_session=True,
@@ -63,6 +78,7 @@ def _record_thread(
                 break
             time.sleep(0.1)
         console.log(f"ffmpeg for {label} exited")
+
         if stop_event.is_set() and proc.poll() is None:
             # Try the graceful "q" quit first. If stdin is unavailable or this
             # doesn't finish ffmpeg in time, fall back to SIGINT/terminate/kill.
@@ -83,6 +99,18 @@ def _record_thread(
                         proc.kill()
     except Exception:
         console.log(f"ffmpeg for {label} exited unexpectedly")
+        console.print_exception()
+
+    try:
+        stderr_f.close()  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+    try:
+        log_path = Path(log_path)
+        final_path = Path(out_aac)
+        console.log(f"Recording finished: {final_path} (log: {log_path})")
+    except Exception:
         console.print_exception()
 
 
@@ -138,11 +166,13 @@ def find_device_index_by_name(
 
 
 def start_recording(
-    ffmpeg_path: str, output_dir: Path, device_index: int, label: str, stop_event: Event
+    ffmpeg_path: str,
+    output_dir: Path,
+    device_index: int,
+    label: str,
+    stop_event: Event,
 ) -> tuple[Thread, Path]:
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    filename = f"record-discord-{label}-{timestamp}.m4a"
-    path = output_dir / filename
+    path = output_dir / f"{label}.aac"
     thread = Thread(
         target=_record_thread,
         args=(ffmpeg_path, path, device_index, stop_event, label),
@@ -185,8 +215,11 @@ def main() -> None:
     threads: list[Thread] = []
     paths: list[Path] = []
 
-    output_dir = Path.home() / "Downloads"
+    base_output = Path.home() / "Downloads"
+    timestamp_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    output_dir = base_output / timestamp_dir
     output_dir.mkdir(parents=True, exist_ok=True)
+    console.log(f"Writing output to: {output_dir}")
 
     for name, label in DEVICES_MAPPING:
         device_index = find_device_index_by_name(name, ffmpeg_devices)
