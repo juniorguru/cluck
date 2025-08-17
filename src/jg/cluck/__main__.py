@@ -1,9 +1,11 @@
 import os
-import re
 import signal
-import subprocess
 import time
 from datetime import datetime
+from threading import Thread
+
+import sounddevice as sd
+import soundfile as sf
 from rich.console import Console
 
 console = Console()
@@ -13,20 +15,19 @@ running = True
 
 def get_device_index(name):
     try:
-        result = subprocess.run(
-            ["ffmpeg", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        out = result.stderr or result.stdout or ""
-        for line in out.splitlines():
-            if name in line:
-                m = re.search(r"\[(\d+)\]", line)
-                if m:
-                    return m.group(1)
-    except FileNotFoundError:
-        console.log("ffmpeg not found on PATH")
+        devices = sd.query_devices()
+        for i, d in enumerate(devices):
+            if isinstance(d, dict):
+                dev_name = d.get("name") or ""
+            else:
+                try:
+                    dev_name = str(d)
+                except Exception:
+                    dev_name = ""
+            if name in dev_name:
+                return i
+    except Exception:
+        console.log("sounddevice not available or failed to list devices")
     return None
 
 
@@ -34,46 +35,41 @@ def start_record(index, label):
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     outdir = os.path.expanduser("~/Downloads")
     os.makedirs(outdir, exist_ok=True)
-    filename = f"record-discord-{label}-{ts}.m4a"
+    filename = f"record-discord-{label}-{ts}.flac"
     path = os.path.join(outdir, filename)
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-f",
-        "avfoundation",
-        "-i",
-        f":{index}",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "128k",
-        path,
-    ]
-    try:
-        p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        console.log(f"Recording {label} -> {path}")
-        return p, path
-    except FileNotFoundError:
-        console.log("ffmpeg not found, cannot record")
-        return None, None
+
+    def _rec_thread(path: str, device_index: int):
+        samplerate = 44100
+        try:
+            with sf.SoundFile(
+                path,
+                mode="w",
+                samplerate=samplerate,
+                channels=1,
+                format="FLAC",
+                subtype="PCM_16",
+            ) as file:
+                with sd.InputStream(
+                    samplerate=samplerate, device=device_index, channels=1
+                ) as stream:
+                    console.log(f"Recording {label} -> {path}")
+                    while running:
+                        data, _ = stream.read(1024)
+                        file.write(data)
+        except Exception as exc:
+            console.log(f"Recording {label} failed: {exc}")
+
+    thread = Thread(target=_rec_thread, args=(path, index), daemon=True)
+    thread.start()
+    return thread, path
 
 
 def stop_all():
-    for p in procs:
+    for t in procs:
         try:
-            if p.poll() is None:
-                p.terminate()
+            t.join(timeout=5)
         except Exception:
             pass
-    for p in procs:
-        try:
-            p.wait(timeout=5)
-        except Exception:
-            try:
-                if p.poll() is None:
-                    p.kill()
-            except Exception:
-                pass
 
 def signal_handler(sig, frame):
     global running
