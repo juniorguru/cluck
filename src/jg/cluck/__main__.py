@@ -39,7 +39,7 @@ def _record_thread(
     ]
     console.log(f"[ffmpeg {label}] Starting: {' '.join(ffmpeg_cmd)}")
 
-    proc = subprocess.Popen(
+    process = subprocess.Popen(
         ffmpeg_cmd,
         stderr=subprocess.PIPE,
         stdout=subprocess.DEVNULL,
@@ -47,62 +47,61 @@ def _record_thread(
     )
 
     try:
-        assert proc.stderr is not None
+        assert process.stderr is not None
         while True:
             if stop_event.is_set():
                 break
-            line = proc.stderr.readline()
-            if line == "":
+            stderr_line = process.stderr.readline()
+            if stderr_line == "":
                 break
-            console.log(f"[ffmpeg {label}] {line.strip()}")
+            console.log(f"[ffmpeg {label}] {stderr_line.strip()}")
 
-        if stop_event.is_set() and proc.poll() is None:
+        if stop_event.is_set() and process.poll() is None:
             try:
-                proc.send_signal(signal.SIGINT)
-                proc.wait(timeout=5)
+                process.send_signal(signal.SIGINT)
+                process.wait(timeout=5)
             except Exception:
                 try:
-                    proc.terminate()
-                    proc.wait(timeout=2)
+                    process.terminate()
+                    process.wait(timeout=2)
                 except Exception:
-                    proc.kill()
-
+                    process.kill()
     except Exception:
         console.log(f"[ffmpeg {label}] Failed or exited unexpectedly")
         console.print_exception()
     finally:
         try:
-            rc = proc.poll()
-            if rc is None:
+            return_code = process.poll()
+            if return_code is None:
                 try:
-                    proc.send_signal(signal.SIGINT)
-                    proc.wait(timeout=5)
+                    process.send_signal(signal.SIGINT)
+                    process.wait(timeout=5)
                 except Exception:
                     try:
-                        proc.terminate()
-                        proc.wait(timeout=2)
+                        process.terminate()
+                        process.wait(timeout=2)
                     except Exception:
-                        proc.kill()
+                        process.kill()
             else:
-                console.log(f"[ffmpeg {label}] Process exited with code: {rc}")
+                console.log(f"[ffmpeg {label}] Process exited with code: {return_code}")
         finally:
             try:
-                if proc.stderr:
-                    proc.stderr.close()
+                if process.stderr:
+                    process.stderr.close()
             except Exception:
                 pass
 
 
 def run_ffmpeg_list_devices(ffmpeg_path: str) -> str:
     """Run ffmpeg to list avfoundation devices and return stderr text (ffmpeg prints devices to stderr)."""
-    proc = subprocess.run(
+    completed = subprocess.run(
         [ffmpeg_path, "-f", "avfoundation", "-list_devices", "true", "-i", ""],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         text=True,
         check=True,
     )
-    if output := (proc.stderr or ""):
+    if output := (completed.stderr or ""):
         return output
     raise RuntimeError(
         "ffmpeg did not produce any output when listing avfoundation devices"
@@ -111,9 +110,9 @@ def run_ffmpeg_list_devices(ffmpeg_path: str) -> str:
 
 def parse_avfoundation_device_list(output: str) -> dict[int, str]:
     """Parse ffmpeg avfoundation device list stderr output into a mapping index->device name."""
-    result: dict[int, str] = {}
+    index_to_name: dict[int, str] = {}
     if not output:
-        return result
+        return index_to_name
     out_lines = output.splitlines()
     audio_section = False
     for line in out_lines:
@@ -121,13 +120,13 @@ def parse_avfoundation_device_list(output: str) -> dict[int, str]:
             audio_section = True
             continue
         if audio_section:
-            m = re.search(r"\[(\d+)\]\s+(.+)$", line)
-            if m:
-                idx = int(m.group(1))
-                name = m.group(2).strip()
-                result[idx] = name
+            match = re.search(r"\[(\d+)\]\s+(.+)$", line)
+            if match:
+                index = int(match.group(1))
+                name = match.group(2).strip()
+                index_to_name[index] = name
             # stop heuristics intentionally omitted; return whatever we found
-    return result
+    return index_to_name
 
 
 def start_recording(
@@ -147,17 +146,13 @@ def start_recording(
     return thread, path
 
 
-def stop_all(procs: list[Thread]) -> None:
-    for t in procs:
+def stop_all(threads: list[Thread]) -> None:
+    for thread in threads:
         try:
-            t.join(timeout=5)
+            thread.join(timeout=5)
         except Exception:
             pass
 
-def signal_handler(sig: int, frame) -> None:
-    global running
-    running = False
-    console.log("Stopping all recordings...")
 
 def main() -> None:
     stop_event = Event()
@@ -177,36 +172,36 @@ def main() -> None:
         sys.exit(1)
 
     # list ffmpeg's avfoundation audio devices for diagnostics
-    raw = run_ffmpeg_list_devices(ffmpeg_path)
-    ff_dev = parse_avfoundation_device_list(raw)
-    if ff_dev:
-        console.log(f"ffmpeg avfoundation audio devices: {ff_dev}")
+    raw_output = run_ffmpeg_list_devices(ffmpeg_path)
+    ff_devices = parse_avfoundation_device_list(raw_output)
+    if ff_devices:
+        console.log(f"ffmpeg avfoundation audio devices: {ff_devices}")
     else:
         console.log(
             "No avfoundation audio devices found by ffmpeg (this may be fine on some systems)."
         )
 
-    procs: list[Thread] = []
-    files: list[Path] = []
+    threads: list[Thread] = []
+    paths: list[Path] = []
 
     for name, label in DEVICES_MAPPING:
-        needle = name.lower()
-        matched_index = None
-        for idx, dev_name in ff_dev.items():
-            if needle in dev_name.lower():
-                matched_index = idx
+        search_lower = name.lower()
+        matched_device_index = None
+        for index, device_name in ff_devices.items():
+            if search_lower in device_name.lower():
+                matched_device_index = index
                 break
-        if matched_index is not None:
-            proc, path = start_recording(matched_index, label, stop_event, ffmpeg_path)
-            if proc:
-                procs.append(proc)
-                files.append(path)
+        if matched_device_index is not None:
+            thread, path = start_recording(matched_device_index, label, stop_event, ffmpeg_path)
+            if thread:
+                threads.append(thread)
+                paths.append(path)
         else:
             console.print(
                 f"[red]{name} not found among ffmpeg devices, skipping...[/red]"
             )
 
-    if not procs:
+    if not threads:
         console.print(
             "[red]No recording processes started.[/red] Ensure devices are available."
         )
@@ -219,10 +214,10 @@ def main() -> None:
     except KeyboardInterrupt:
         stop_event.set()
 
-    stop_all(procs)
+    stop_all(threads)
     console.log("All recordings finished.")
-    for file in files:
-        console.log(file)
+    for path in paths:
+        console.log(path)
 
 
 if __name__ == "__main__":
