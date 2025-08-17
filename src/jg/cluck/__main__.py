@@ -27,8 +27,20 @@ def _record_thread(
     stop_event: Event,
     label: str,
 ) -> None:
-    # Record ADTS AAC (.aac); ADTS is streamable and can often be
-    # played even when the file is truncated.
+    """Record audio from an avfoundation input into an ADTS AAC file.
+
+    The function launches an ffmpeg subprocess that records from the
+    specified device index and writes an ADTS (.aac) file at ``path``.
+    It watches ``stop_event`` to perform a graceful shutdown sequence
+    (send "q" to ffmpeg stdin, then SIGINT/terminate/kill fallbacks).
+
+    Parameters
+    - ffmpeg_path: path to the ffmpeg binary.
+    - path: target Path (without suffix) used to build filenames.
+    - device_index: avfoundation device index to record from.
+    - stop_event: Event used to request recorder shutdown.
+    - label: short label used for logging.
+    """
     out_aac = str(path.with_suffix(".aac"))
     log_path = str(path.with_suffix(".ffmpeg.log"))
 
@@ -172,6 +184,12 @@ def start_recording(
     label: str,
     stop_event: Event,
 ) -> tuple[Thread, Path]:
+    """Start a background thread that records a device to disk.
+
+    Returns a tuple of the started Thread and the Path to the recording
+    file (the .aac file). The thread is started as a daemon.
+    """
+
     path = output_dir / f"{label}.aac"
     thread = Thread(
         target=_record_thread,
@@ -183,6 +201,12 @@ def start_recording(
 
 
 def stop_all(threads: list[Thread]) -> None:
+    """Attempt to join all recording threads, logging any failures.
+
+    Each thread is joined with a short timeout to avoid hanging the
+    shutdown sequence.
+    """
+
     for thread in threads:
         try:
             thread.join(timeout=5)
