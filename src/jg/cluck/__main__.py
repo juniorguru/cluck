@@ -39,7 +39,7 @@ def _record_thread(
     ]
     console.log(f"[ffmpeg {label}] Starting: {' '.join(ffmpeg_cmd)}")
 
-    process = subprocess.Popen(
+    proc = subprocess.Popen(
         ffmpeg_cmd,
         stderr=subprocess.PIPE,
         stdout=subprocess.DEVNULL,
@@ -47,47 +47,48 @@ def _record_thread(
     )
 
     try:
-        assert process.stderr is not None
+        assert proc.stderr is not None
         while True:
             if stop_event.is_set():
                 break
-            stderr_line = process.stderr.readline()
-            if stderr_line == "":
+            line = proc.stderr.readline()
+            if line == "":
                 break
-            console.log(f"[ffmpeg {label}] {stderr_line.strip()}")
+            console.log(f"[ffmpeg {label}] {line.strip()}")
 
-        if stop_event.is_set() and process.poll() is None:
+        if stop_event.is_set() and proc.poll() is None:
             try:
-                process.send_signal(signal.SIGINT)
-                process.wait(timeout=5)
+                proc.send_signal(signal.SIGINT)
+                proc.wait(timeout=5)
             except Exception:
                 try:
-                    process.terminate()
-                    process.wait(timeout=2)
+                    proc.terminate()
+                    proc.wait(timeout=2)
                 except Exception:
-                    process.kill()
+                    proc.kill()
     except Exception:
         console.log(f"[ffmpeg {label}] Failed or exited unexpectedly")
         console.print_exception()
     finally:
+        # Ensure the process is terminated and its stderr is closed.
         try:
-            return_code = process.poll()
+            return_code = proc.poll()
             if return_code is None:
                 try:
-                    process.send_signal(signal.SIGINT)
-                    process.wait(timeout=5)
+                    proc.send_signal(signal.SIGINT)
+                    proc.wait(timeout=5)
                 except Exception:
                     try:
-                        process.terminate()
-                        process.wait(timeout=2)
+                        proc.terminate()
+                        proc.wait(timeout=2)
                     except Exception:
-                        process.kill()
+                        proc.kill()
             else:
                 console.log(f"[ffmpeg {label}] Process exited with code: {return_code}")
         finally:
             try:
-                if process.stderr:
-                    process.stderr.close()
+                if proc.stderr:
+                    proc.stderr.close()
             except Exception:
                 pass
 
@@ -173,9 +174,9 @@ def main() -> None:
 
     # list ffmpeg's avfoundation audio devices for diagnostics
     raw_output = run_ffmpeg_list_devices(ffmpeg_path)
-    ff_devices = parse_avfoundation_device_list(raw_output)
-    if ff_devices:
-        console.log(f"ffmpeg avfoundation audio devices: {ff_devices}")
+    ffmpeg_devices = parse_avfoundation_device_list(raw_output)
+    if ffmpeg_devices:
+        console.log(f"ffmpeg avfoundation audio devices: {ffmpeg_devices}")
     else:
         console.log(
             "No avfoundation audio devices found by ffmpeg (this may be fine on some systems)."
@@ -187,7 +188,7 @@ def main() -> None:
     for name, label in DEVICES_MAPPING:
         search_lower = name.lower()
         matched_device_index = None
-        for index, device_name in ff_devices.items():
+        for index, device_name in ffmpeg_devices.items():
             if search_lower in device_name.lower():
                 matched_device_index = index
                 break
