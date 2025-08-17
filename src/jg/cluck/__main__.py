@@ -37,7 +37,7 @@ def _record_thread(
         "128k",
         out_path,
     ]
-    console.log(f"Starting: {' '.join(ffmpeg_cmd)}")
+    console.log(" ".join(ffmpeg_cmd))
 
     proc = subprocess.Popen(
         ffmpeg_cmd,
@@ -51,6 +51,7 @@ def _record_thread(
             if proc.poll() is not None:
                 break
             time.sleep(0.1)
+        console.log(f"ffmpeg for {label} exited")
 
         if stop_event.is_set() and proc.poll() is None:
             try:
@@ -63,7 +64,7 @@ def _record_thread(
                 except Exception:
                     proc.kill()
     except Exception:
-        console.log(f"Failed or exited unexpectedly: {label}")
+        console.log(f"ffmpeg for {label} exited unexpectedly")
         console.print_exception()
 
 
@@ -197,8 +198,6 @@ def main() -> None:
 
     stop_all(threads)
     console.log("All recordings finished.")
-    for path in paths:
-        console.log(path)
 
 
 if __name__ == "__main__":
