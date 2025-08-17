@@ -11,13 +11,7 @@ console = Console()
 running = True
 
 def record_audio(filename: str, device: int, samplerate: int = 44100):
-    """Record audio to a FLAC file (filename) until the global `running` flag is cleared.
-
-    FLAC is lossless compressed and usually much smaller than WAV. `soundfile` uses
-    libsndfile to write FLAC directly.
-    """
     console.log(f"Starting recording to {filename} from device {device}")
-    # Write FLAC (lossless compressed) to save disk space compared to WAV
     with sf.SoundFile(
         filename,
         mode="w",
@@ -37,11 +31,8 @@ def signal_handler(sig, frame):
     running = False
 
 signal.signal(signal.SIGINT, signal_handler)
-
-# Výběr zařízení (např. první Jabra mic, nebo default)
 devices = sd.query_devices()
 for i, d in enumerate(devices):
-    # devices entries can be dict-like or other types; handle both safely
     if isinstance(d, dict):
         name = d.get("name") or ""
     else:
@@ -58,8 +49,6 @@ else:
 
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 target_flac = os.path.expanduser(f"~/recording_{timestamp}.flac")
-
-# Start recording thread
 thread = Thread(target=record_audio, args=(target_flac, mic_device))
 thread.start()
 
