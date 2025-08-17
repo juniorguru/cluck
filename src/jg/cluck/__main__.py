@@ -2,16 +2,13 @@ import signal
 from pathlib import Path
 import time
 from datetime import datetime
-from threading import Thread
+from threading import Thread, Event
 
 import sounddevice
 import soundfile
 from rich.console import Console
 
 console = Console()
-procs = []
-files = []
-running = True
 
 
 DEVICES_MAPPING = [
@@ -31,14 +28,14 @@ def get_device_index(name) -> int | None:
     return None
 
 
-def start_recording(device_index, label) -> tuple[Thread, Path]:
+def start_recording(device_index, label, stop_event: Event) -> tuple[Thread, Path]:
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     outdir = Path.home() / "Downloads"
     outdir.mkdir(parents=True, exist_ok=True)
     filename = f"record-discord-{label}-{ts}.flac"
     path = outdir / filename
 
-    def _rec_thread(path: str, device_index: int):
+    def _rec_thread(path: str, device_index: int, stop_event: Event):
         samplerate = 44100
         try:
             with soundfile.SoundFile(
@@ -53,19 +50,21 @@ def start_recording(device_index, label) -> tuple[Thread, Path]:
                     samplerate=samplerate, device=device_index, channels=1
                 ) as stream:
                     console.log(f"Recording {label}: {path}")
-                    while running:
+                    while not stop_event.is_set():
                         data, _ = stream.read(1024)
                         file.write(data)
         except Exception:
             console.log(f"Recording {label} failed!")
             console.print_exception()
 
-    thread = Thread(target=_rec_thread, args=(path, device_index), daemon=True)
+    thread = Thread(
+        target=_rec_thread, args=(path, device_index, stop_event), daemon=True
+    )
     thread.start()
     return thread, path
 
 
-def stop_all():
+def stop_all(procs: list[Thread]) -> None:
     for t in procs:
         try:
             t.join(timeout=5)
@@ -77,12 +76,22 @@ def signal_handler(sig, frame):
     running = False
     console.log("Stopping all recordings...")
 
-signal.signal(signal.SIGINT, signal_handler)
 def main() -> None:
+    stop_event = Event()
+
+    def _signal_handler(sig, frame):
+        stop_event.set()
+        console.log("Stopping all recordings...")
+
+    signal.signal(signal.SIGINT, _signal_handler)
+
+    procs: list[Thread] = []
+    files: list[Path] = []
+
     for name, label in DEVICES_MAPPING:
         index = get_device_index(name)
         if index is not None:
-            proc, path = start_recording(index, label)
+            proc, path = start_recording(index, label, stop_event)
             if proc:
                 procs.append(proc)
                 files.append(path)
@@ -95,12 +104,12 @@ def main() -> None:
 
     console.log("Recording... Press Ctrl+C to stop.")
     try:
-        while running:
+        while not stop_event.is_set():
             time.sleep(0.5)
     except KeyboardInterrupt:
-        # already handled by signal handler, but ensure flag is cleared
-        pass
-    stop_all()
+        stop_event.set()
+
+    stop_all(procs)
     console.log("All recordings finished.")
     for file in files:
         console.log(file)
