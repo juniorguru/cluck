@@ -18,7 +18,7 @@ DEVICES_MAPPING = [
 ]
 
 
-def get_device_index(name) -> int | None:
+def get_device_index(name: str) -> int | None:
     devices = sounddevice.query_devices()
     needle = name.lower()
     for i, device in enumerate(devices):
@@ -70,7 +70,9 @@ def _record_thread(
         console.print_exception()
 
 
-def start_recording(device_index, label, stop_event: Event) -> tuple[Thread, Path]:
+def start_recording(
+    device_index: int, label: str, stop_event: Event
+) -> tuple[Thread, Path]:
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     outdir = Path.home() / "Downloads"
     outdir.mkdir(parents=True, exist_ok=True)
@@ -90,7 +92,7 @@ def stop_all(procs: list[Thread]) -> None:
         except Exception:
             pass
 
-def signal_handler(sig, frame):
+def signal_handler(sig: int, frame) -> None:
     global running
     running = False
     console.log("Stopping all recordings...")
@@ -98,7 +100,7 @@ def signal_handler(sig, frame):
 def main() -> None:
     stop_event = Event()
 
-    def _signal_handler(sig, frame):
+    def _signal_handler(sig: int, frame) -> None:
         stop_event.set()
         console.log("Stopping all recordings...")
 
@@ -115,10 +117,12 @@ def main() -> None:
                 procs.append(proc)
                 files.append(path)
         else:
-            console.log(f"{name} not found, skipping...")
+            console.print(f"[red]{name} not found, skipping...[/red]")
 
     if not procs:
-        console.log("No recording processes started. Ensure devices are available.")
+        console.print(
+            "[red]No recording processes started.[/red] Ensure devices are available."
+        )
         return
 
     console.log("Recording... Press Ctrl+C to stop.")
