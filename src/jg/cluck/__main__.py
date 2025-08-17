@@ -20,21 +20,10 @@ DEVICES_MAPPING = [
 ]
 
 
-# removed get_device_index: we rely on ffmpeg's avfoundation device listing
-
-
 def _record_thread(
     path: Path, device_index: int, stop_event: Event, label: str, ffmpeg_path: str
 ) -> None:
-    if not ffmpeg_path:
-        console.log("ffmpeg path not provided; cannot record with ffmpeg.")
-        return
-
     out_path = str(path.with_suffix(".m4a"))
-
-    # Build ffmpeg command for macOS avfoundation/CoreAudio input via -f avfoundation or -f coreaudio
-    # Prefer avfoundation device spec if available; on macOS, sounddevice index may not match ffmpeg names.
-    # We'll use the device name directly via avfoundation (format "<index>") if possible, otherwise try coreaudio.
     ffmpeg_cmd = [
         ffmpeg_path,
         "-y",
@@ -48,8 +37,7 @@ def _record_thread(
         "128k",
         out_path,
     ]
-
-    console.log(f"Starting ffmpeg for '{label}': {' '.join(ffmpeg_cmd)}")
+    console.log(f"[ffmpeg {label}] Starting: {' '.join(ffmpeg_cmd)}")
 
     proc = subprocess.Popen(
         ffmpeg_cmd,
@@ -59,14 +47,15 @@ def _record_thread(
     )
 
     try:
-        # Read stderr in a loop and log lines; exit if process finishes or stop_event set
         assert proc.stderr is not None
-        while not stop_event.is_set():
+        while True:
+            if stop_event.is_set():
+                break
             line = proc.stderr.readline()
             if line == "":
-                # process ended
                 break
             console.log(f"[ffmpeg {label}] {line.strip()}")
+
         if stop_event.is_set() and proc.poll() is None:
             try:
                 proc.send_signal(signal.SIGINT)
@@ -77,20 +66,31 @@ def _record_thread(
                     proc.wait(timeout=2)
                 except Exception:
                     proc.kill()
+
     except Exception:
-        console.log(f"ffmpeg recording for '{label}' failed or exited unexpectedly")
+        console.log(f"[ffmpeg {label}] Failed or exited unexpectedly")
         console.print_exception()
     finally:
-        if proc.poll() is None:
-            try:
-                proc.send_signal(signal.SIGINT)
-                proc.wait(timeout=5)
-            except Exception:
+        try:
+            rc = proc.poll()
+            if rc is None:
                 try:
-                    proc.terminate()
-                    proc.wait(timeout=2)
+                    proc.send_signal(signal.SIGINT)
+                    proc.wait(timeout=5)
                 except Exception:
-                    proc.kill()
+                    try:
+                        proc.terminate()
+                        proc.wait(timeout=2)
+                    except Exception:
+                        proc.kill()
+            else:
+                console.log(f"[ffmpeg {label}] Process exited with code: {rc}")
+        finally:
+            try:
+                if proc.stderr:
+                    proc.stderr.close()
+            except Exception:
+                pass
 
 
 def list_avfoundation_audio_devices(ffmpeg_path: str) -> dict[int, str]:
