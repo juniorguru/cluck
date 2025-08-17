@@ -24,13 +24,21 @@ def _record_thread(
     ffmpeg_path: str, path: Path, device_index: int, stop_event: Event, label: str
 ) -> None:
     out_path = str(path.with_suffix(".m4a"))
+    # Increase input queue size to reduce risk of buffer underruns/clicks
+    # and force a stable sample rate / channel count to avoid resampling artifacts.
     ffmpeg_cmd = [
         ffmpeg_path,
         "-y",
+        "-thread_queue_size",
+        "4096",
         "-f",
         "avfoundation",
         "-i",
         f":{device_index}",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
         "-c:a",
         "aac",
         "-b:a",
@@ -38,11 +46,14 @@ def _record_thread(
         out_path,
     ]
     console.log(" ".join(ffmpeg_cmd))
-
+    # Keep stdin open so we can send the "q" command to let ffmpeg finish
+    # cleanly (preferred over forcing SIGINT/terminate which may truncate frames).
     proc = subprocess.Popen(
         ffmpeg_cmd,
         stderr=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
+        stdin=subprocess.PIPE,
+        start_new_session=True,
     )
     try:
         while True:
@@ -52,17 +63,24 @@ def _record_thread(
                 break
             time.sleep(0.1)
         console.log(f"ffmpeg for {label} exited")
-
         if stop_event.is_set() and proc.poll() is None:
+            # Try the graceful "q" quit first. If stdin is unavailable or this
+            # doesn't finish ffmpeg in time, fall back to SIGINT/terminate/kill.
             try:
-                proc.send_signal(signal.SIGINT)
+                if proc.stdin:
+                    proc.stdin.write(b"q")
+                    proc.stdin.flush()
                 proc.wait(timeout=5)
             except Exception:
                 try:
-                    proc.terminate()
-                    proc.wait(timeout=2)
+                    proc.send_signal(signal.SIGINT)
+                    proc.wait(timeout=5)
                 except Exception:
-                    proc.kill()
+                    try:
+                        proc.terminate()
+                        proc.wait(timeout=2)
+                    except Exception:
+                        proc.kill()
     except Exception:
         console.log(f"ffmpeg for {label} exited unexpectedly")
         console.print_exception()
@@ -74,6 +92,7 @@ def run_ffmpeg_list_devices(ffmpeg_path: str) -> str:
         [ffmpeg_path, "-f", "avfoundation", "-list_devices", "true", "-i", ""],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
         text=True,
     )
     if output := (completed.stderr or ""):
