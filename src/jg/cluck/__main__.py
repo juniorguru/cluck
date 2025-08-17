@@ -21,7 +21,7 @@ DEVICES_MAPPING = [
 
 
 def _record_thread(
-    path: Path, device_index: int, stop_event: Event, label: str, ffmpeg_path: str
+    ffmpeg_path: str, path: Path, device_index: int, stop_event: Event, label: str
 ) -> None:
     out_path = str(path.with_suffix(".m4a"))
     ffmpeg_cmd = [
@@ -109,11 +109,13 @@ def run_ffmpeg_list_devices(ffmpeg_path: str) -> str:
     )
 
 
-def parse_avfoundation_device_list(output: str) -> dict[int, str]:
-    """Parse ffmpeg avfoundation device list stderr output into a mapping index->device name."""
-    index_to_name: dict[int, str] = {}
+def parse_avfoundation_device_list(output: str) -> list[tuple[str, int]]:
+    """Parse ffmpeg avfoundation device list stderr output into a list of
+    (device_name, index) tuples in the order they appear.
+    """
+    devices: list[tuple[str, int]] = []
     if not output:
-        return index_to_name
+        return devices
     out_lines = output.splitlines()
     audio_section = False
     for line in out_lines:
@@ -125,22 +127,33 @@ def parse_avfoundation_device_list(output: str) -> dict[int, str]:
             if match:
                 index = int(match.group(1))
                 name = match.group(2).strip()
-                index_to_name[index] = name
+                devices.append((name, index))
             # stop heuristics intentionally omitted; return whatever we found
-    return index_to_name
+    return devices
+
+
+def find_device_index_by_name(
+    device_name_to_find: str, devices: list[tuple[str, int]]
+) -> int | None:
+    """Return the ffmpeg device index for the first device whose name contains
+    the provided search string (case-insensitive), or None if not found.
+    """
+    needle = device_name_to_find.lower()
+    for device_name, index in devices:
+        if needle in device_name.lower():
+            return index
+    return None
 
 
 def start_recording(
-    device_index: int, label: str, stop_event: Event, ffmpeg_path: str
+    ffmpeg_path: str, output_dir: Path, device_index: int, label: str, stop_event: Event
 ) -> tuple[Thread, Path]:
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    outdir = Path.home() / "Downloads"
-    outdir.mkdir(parents=True, exist_ok=True)
     filename = f"record-discord-{label}-{ts}.m4a"
-    path = outdir / filename
+    path = output_dir / filename
     thread = Thread(
         target=_record_thread,
-        args=(path, device_index, stop_event, label, ffmpeg_path),
+        args=(ffmpeg_path, path, device_index, stop_event, label),
         daemon=True,
     )
     thread.start()
@@ -185,15 +198,16 @@ def main() -> None:
     threads: list[Thread] = []
     paths: list[Path] = []
 
+    # Prepare output directory once and reuse for all recordings
+    output_dir = Path.home() / "Downloads"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     for name, label in DEVICES_MAPPING:
-        search_lower = name.lower()
-        matched_device_index = None
-        for index, device_name in ffmpeg_devices.items():
-            if search_lower in device_name.lower():
-                matched_device_index = index
-                break
-        if matched_device_index is not None:
-            thread, path = start_recording(matched_device_index, label, stop_event, ffmpeg_path)
+        device_index = find_device_index_by_name(name, ffmpeg_devices)
+        if device_index is not None:
+            thread, path = start_recording(
+                ffmpeg_path, output_dir, device_index, label, stop_event
+            )
             if thread:
                 threads.append(thread)
                 paths.append(path)
