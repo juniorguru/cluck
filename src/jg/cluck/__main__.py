@@ -4,9 +4,11 @@ import time
 from datetime import datetime
 from threading import Thread, Event
 
-import sounddevice
-import soundfile
+import shutil
+import subprocess
 from rich.console import Console
+import re
+import sys
 
 console = Console()
 
@@ -18,68 +20,120 @@ DEVICES_MAPPING = [
 ]
 
 
-def get_device_index(name: str) -> int | None:
-    devices = sounddevice.query_devices()
-    needle = name.lower()
-    for i, device in enumerate(devices):
-        device_name = (device.get("name") or "").lower()
-        if needle in device_name:
-            return i
-    return None
+# removed get_device_index: we rely on ffmpeg's avfoundation device listing
 
 
 def _record_thread(
-    path: Path, device_index: int, stop_event: Event, label: str
+    path: Path, device_index: int, stop_event: Event, label: str, ffmpeg_path: str
 ) -> None:
-    samplerate = 44100
+    if not ffmpeg_path:
+        console.log("ffmpeg path not provided; cannot record with ffmpeg.")
+        return
+
+    out_path = str(path.with_suffix(".m4a"))
+
+    # Build ffmpeg command for macOS avfoundation/CoreAudio input via -f avfoundation or -f coreaudio
+    # Prefer avfoundation device spec if available; on macOS, sounddevice index may not match ffmpeg names.
+    # We'll use the device name directly via avfoundation (format "<index>") if possible, otherwise try coreaudio.
+    ffmpeg_cmd = [
+        ffmpeg_path,
+        "-y",
+        "-f",
+        "avfoundation",
+        "-i",
+        f":{device_index}",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        out_path,
+    ]
+
+    console.log(f"Starting ffmpeg for '{label}': {' '.join(ffmpeg_cmd)}")
+
+    proc = subprocess.Popen(
+        ffmpeg_cmd,
+        stderr=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        text=True,
+    )
+
     try:
-        with soundfile.SoundFile(
-            path,
-            mode="w",
-            samplerate=samplerate,
-            channels=1,
-            format="FLAC",
-            subtype="PCM_16",
-        ) as file:
-            with sounddevice.InputStream(
-                samplerate=samplerate, device=device_index, channels=1
-            ) as stream:
-                console.log(f"Recording {label}: {path}")
-                while not stop_event.is_set():
-                    try:
-                        data, _ = stream.read(1024)
-                    except Exception as exc:
-                        if isinstance(exc, sounddevice.PortAudioError):
-                            console.log(
-                                f"Device for '{label}' disappeared; stopping this track."
-                            )
-                            break
-                        if isinstance(exc, OSError):
-                            console.log(
-                                f"Device for '{label}' reported OS error and disappeared; stopping this track."
-                            )
-                            break
-                        console.log(
-                            f"Recording {label} encountered unexpected error; stopping this track and showing traceback:"
-                        )
-                        console.print_exception()
-                        break
-                    file.write(data)
+        # Read stderr in a loop and log lines; exit if process finishes or stop_event set
+        assert proc.stderr is not None
+        while not stop_event.is_set():
+            line = proc.stderr.readline()
+            if line == "":
+                # process ended
+                break
+            console.log(f"[ffmpeg {label}] {line.strip()}")
+        if stop_event.is_set() and proc.poll() is None:
+            try:
+                proc.send_signal(signal.SIGINT)
+                proc.wait(timeout=5)
+            except Exception:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=2)
+                except Exception:
+                    proc.kill()
     except Exception:
-        console.log(f"Recording {label} failed!")
+        console.log(f"ffmpeg recording for '{label}' failed or exited unexpectedly")
         console.print_exception()
+    finally:
+        if proc.poll() is None:
+            try:
+                proc.send_signal(signal.SIGINT)
+                proc.wait(timeout=5)
+            except Exception:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=2)
+                except Exception:
+                    proc.kill()
+
+
+def list_avfoundation_audio_devices(ffmpeg_path: str) -> dict[int, str]:
+    """Run ffmpeg -f avfoundation -list_devices true -i "" and parse audio devices into index->name."""
+    result = {}
+    try:
+        proc = subprocess.run(
+            [ffmpeg_path, "-f", "avfoundation", "-list_devices", "true", "-i", ""],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        out = proc.stderr.splitlines()
+        audio_section = False
+        for line in out:
+            if "AVFoundation audio devices:" in line or "Audio devices" in line:
+                audio_section = True
+                continue
+            if audio_section:
+                m = re.search(r"\[(\d+)\]\s+(.+)$", line)
+                if m:
+                    idx = int(m.group(1))
+                    name = m.group(2).strip()
+                    result[idx] = name
+                # end of section heuristics: empty line or other header
+    except Exception:
+        pass
+    return result
 
 
 def start_recording(
-    device_index: int, label: str, stop_event: Event
+    device_index: int, label: str, stop_event: Event, ffmpeg_path: str
 ) -> tuple[Thread, Path]:
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     outdir = Path.home() / "Downloads"
     outdir.mkdir(parents=True, exist_ok=True)
-    filename = f"record-discord-{label}-{ts}.flac"
+    filename = f"record-discord-{label}-{ts}.m4a"
     path = outdir / filename
     thread = Thread(
-        target=_record_thread, args=(path, device_index, stop_event, label), daemon=True
+        target=_record_thread,
+        args=(path, device_index, stop_event, label, ffmpeg_path),
+        daemon=True,
     )
     thread.start()
     return thread, path
@@ -106,18 +160,42 @@ def main() -> None:
 
     signal.signal(signal.SIGINT, _signal_handler)
 
+    # ensure ffmpeg exists (fail fast)
+    ffmpeg_path = shutil.which("ffmpeg")
+    if not ffmpeg_path:
+        console.print(
+            "[red]ffmpeg not found in PATH. Install ffmpeg (e.g. brew install ffmpeg) and try again.[/red]"
+        )
+        sys.exit(1)
+
+    # list ffmpeg's avfoundation audio devices for diagnostics
+    ff_dev = list_avfoundation_audio_devices(ffmpeg_path)
+    if ff_dev:
+        console.log(f"ffmpeg avfoundation audio devices: {ff_dev}")
+    else:
+        console.log(
+            "No avfoundation audio devices found by ffmpeg (this may be fine on some systems)."
+        )
+
     procs: list[Thread] = []
     files: list[Path] = []
 
     for name, label in DEVICES_MAPPING:
-        index = get_device_index(name)
-        if index is not None:
-            proc, path = start_recording(index, label, stop_event)
+        needle = name.lower()
+        matched_index = None
+        for idx, dev_name in ff_dev.items():
+            if needle in dev_name.lower():
+                matched_index = idx
+                break
+        if matched_index is not None:
+            proc, path = start_recording(matched_index, label, stop_event, ffmpeg_path)
             if proc:
                 procs.append(proc)
                 files.append(path)
         else:
-            console.print(f"[red]{name} not found, skipping...[/red]")
+            console.print(
+                f"[red]{name} not found among ffmpeg devices, skipping...[/red]"
+            )
 
     if not procs:
         console.print(
