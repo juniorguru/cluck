@@ -93,32 +93,40 @@ def _record_thread(
                 pass
 
 
-def list_avfoundation_audio_devices(ffmpeg_path: str) -> dict[int, str]:
-    """Run ffmpeg -f avfoundation -list_devices true -i "" and parse audio devices into index->name."""
-    result = {}
-    try:
-        proc = subprocess.run(
-            [ffmpeg_path, "-f", "avfoundation", "-list_devices", "true", "-i", ""],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-        )
-        out = proc.stderr.splitlines()
-        audio_section = False
-        for line in out:
-            if "AVFoundation audio devices:" in line or "Audio devices" in line:
-                audio_section = True
-                continue
-            if audio_section:
-                m = re.search(r"\[(\d+)\]\s+(.+)$", line)
-                if m:
-                    idx = int(m.group(1))
-                    name = m.group(2).strip()
-                    result[idx] = name
-                # end of section heuristics: empty line or other header
-    except Exception:
-        pass
+def run_ffmpeg_list_devices(ffmpeg_path: str) -> str:
+    """Run ffmpeg to list avfoundation devices and return stderr text (ffmpeg prints devices to stderr)."""
+    proc = subprocess.run(
+        [ffmpeg_path, "-f", "avfoundation", "-list_devices", "true", "-i", ""],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=True,
+    )
+    if output := (proc.stderr or ""):
+        return output
+    raise RuntimeError(
+        "ffmpeg did not produce any output when listing avfoundation devices"
+    )
+
+
+def parse_avfoundation_device_list(output: str) -> dict[int, str]:
+    """Parse ffmpeg avfoundation device list stderr output into a mapping index->device name."""
+    result: dict[int, str] = {}
+    if not output:
+        return result
+    out_lines = output.splitlines()
+    audio_section = False
+    for line in out_lines:
+        if "AVFoundation audio devices:" in line or "Audio devices" in line:
+            audio_section = True
+            continue
+        if audio_section:
+            m = re.search(r"\[(\d+)\]\s+(.+)$", line)
+            if m:
+                idx = int(m.group(1))
+                name = m.group(2).strip()
+                result[idx] = name
+            # stop heuristics intentionally omitted; return whatever we found
     return result
 
 
@@ -169,7 +177,8 @@ def main() -> None:
         sys.exit(1)
 
     # list ffmpeg's avfoundation audio devices for diagnostics
-    ff_dev = list_avfoundation_audio_devices(ffmpeg_path)
+    raw = run_ffmpeg_list_devices(ffmpeg_path)
+    ff_dev = parse_avfoundation_device_list(raw)
     if ff_dev:
         console.log(f"ffmpeg avfoundation audio devices: {ff_dev}")
     else:
