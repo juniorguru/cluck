@@ -1,60 +1,115 @@
 import os
+import re
 import signal
+import subprocess
 import time
 from datetime import datetime
-import sounddevice as sd
-import soundfile as sf
-from threading import Thread
 from rich.console import Console
 
 console = Console()
+procs = []
+files = []
 running = True
 
-def record_audio(filename: str, device: int, samplerate: int = 44100):
-    console.log(f"Starting recording to {filename} from device {device}")
-    with sf.SoundFile(
-        filename,
-        mode="w",
-        samplerate=samplerate,
-        channels=1,
-        format="FLAC",
-        subtype="PCM_16",
-    ) as file:
-        with sd.InputStream(samplerate=samplerate, device=device, channels=1) as stream:
-            while running:
-                data, _ = stream.read(1024)
-                file.write(data)
+def get_device_index(name):
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        out = result.stderr or result.stdout or ""
+        for line in out.splitlines():
+            if name in line:
+                m = re.search(r"\[(\d+)\]", line)
+                if m:
+                    return m.group(1)
+    except FileNotFoundError:
+        console.log("ffmpeg not found on PATH")
+    return None
+
+
+def start_record(index, label):
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    outdir = os.path.expanduser("~/Downloads")
+    os.makedirs(outdir, exist_ok=True)
+    filename = f"record-discord-{label}-{ts}.m4a"
+    path = os.path.join(outdir, filename)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "avfoundation",
+        "-i",
+        f":{index}",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        path,
+    ]
+    try:
+        p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        console.log(f"Recording {label} -> {path}")
+        return p, path
+    except FileNotFoundError:
+        console.log("ffmpeg not found, cannot record")
+        return None, None
+
+
+def stop_all():
+    for p in procs:
+        try:
+            if p.poll() is None:
+                p.terminate()
+        except Exception:
+            pass
+    for p in procs:
+        try:
+            p.wait(timeout=5)
+        except Exception:
+            try:
+                if p.poll() is None:
+                    p.kill()
+            except Exception:
+                pass
 
 def signal_handler(sig, frame):
     global running
-    console.log("Stopping all recordings...")
     running = False
+    console.log("Stopping all recordings...")
 
 signal.signal(signal.SIGINT, signal_handler)
-devices = sd.query_devices()
-for i, d in enumerate(devices):
-    if isinstance(d, dict):
-        name = d.get("name") or ""
+
+mapping = [
+    ("Jabra", "mic-jabra"),
+    ("BlackHole", "blackhole"),
+    ("MacBook", "mic-macbook"),
+]
+
+for name, label in mapping:
+    idx = get_device_index(name)
+    if idx is not None:
+        p, path = start_record(idx, label)
+        if p:
+            procs.append(p)
+            files.append(path)
     else:
-        try:
-            name = str(d)
-        except Exception:
-            name = ""
-    if "Jabra" in name:
-        mic_device = i
-        break
+        console.log(f"{name} not found, skipping...")
+
+if not procs:
+    console.log(
+        "No recording processes started. Ensure ffmpeg is installed and devices are available."
+    )
 else:
-    mic_device = sd.default.device[0]
-
-
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-target_flac = os.path.expanduser(f"~/recording_{timestamp}.flac")
-thread = Thread(target=record_audio, args=(target_flac, mic_device))
-thread.start()
-
-console.log(f"Recording... Press Ctrl+C to stop. File: {target_flac}")
-while running:
-    time.sleep(0.5)
-
-thread.join()
-console.log(f"Recording stopped. File saved as {target_flac}")
+    console.log("Recording... Press Ctrl+C to stop.")
+    try:
+        while running:
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        running = False
+    stop_all()
+    console.log("All recordings finished.")
+    for f in files:
+        console.log(f)
