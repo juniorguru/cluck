@@ -4,8 +4,8 @@ import time
 from datetime import datetime
 from threading import Thread
 
-import sounddevice as sd
-import soundfile as sf
+import sounddevice
+import soundfile
 from rich.console import Console
 
 console = Console()
@@ -13,25 +13,18 @@ procs = []
 files = []
 running = True
 
-def get_device_index(name):
-    try:
-        devices = sd.query_devices()
-        for i, d in enumerate(devices):
-            if isinstance(d, dict):
-                dev_name = d.get("name") or ""
-            else:
-                try:
-                    dev_name = str(d)
-                except Exception:
-                    dev_name = ""
-            if name in dev_name:
-                return i
-    except Exception:
-        console.log("sounddevice not available or failed to list devices")
+
+def get_device_index(name) -> int | None:
+    devices = sounddevice.query_devices()
+    needle = name.lower()
+    for i, device in enumerate(devices):
+        device_name = (device.get("name") or "").lower()
+        if needle in device_name:
+            return i
     return None
 
 
-def start_record(index, label):
+def start_recording(device_index, label) -> tuple[Thread, str]:
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     outdir = os.path.expanduser("~/Downloads")
     os.makedirs(outdir, exist_ok=True)
@@ -41,7 +34,7 @@ def start_record(index, label):
     def _rec_thread(path: str, device_index: int):
         samplerate = 44100
         try:
-            with sf.SoundFile(
+            with soundfile.SoundFile(
                 path,
                 mode="w",
                 samplerate=samplerate,
@@ -49,7 +42,7 @@ def start_record(index, label):
                 format="FLAC",
                 subtype="PCM_16",
             ) as file:
-                with sd.InputStream(
+                with sounddevice.InputStream(
                     samplerate=samplerate, device=device_index, channels=1
                 ) as stream:
                     console.log(f"Recording {label} -> {path}")
@@ -59,7 +52,7 @@ def start_record(index, label):
         except Exception as exc:
             console.log(f"Recording {label} failed: {exc}")
 
-    thread = Thread(target=_rec_thread, args=(path, index), daemon=True)
+    thread = Thread(target=_rec_thread, args=(path, device_index), daemon=True)
     thread.start()
     return thread, path
 
@@ -87,7 +80,7 @@ mapping = [
 for name, label in mapping:
     idx = get_device_index(name)
     if idx is not None:
-        p, path = start_record(idx, label)
+        p, path = start_recording(idx, label)
         if p:
             procs.append(p)
             files.append(path)
