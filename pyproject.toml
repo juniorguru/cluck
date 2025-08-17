@@ -9,6 +9,7 @@ requires-python = ">=3.13"
 dependencies = [
     "rich>=14.1.0",
     "soundfile>=0.13.1",
+    "pyobjc-framework-AVFoundation>=10.0",
 ]
 
 [project.urls]
