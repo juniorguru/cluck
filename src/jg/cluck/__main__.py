@@ -14,6 +14,13 @@ files = []
 running = True
 
 
+DEVICES_MAPPING = [
+    ("Jabra", "mic-jabra"),
+    ("BlackHole", "blackhole"),
+    ("MacBook", "mic-macbook"),
+]
+
+
 def get_device_index(name) -> int | None:
     devices = sounddevice.query_devices()
     needle = name.lower()
@@ -45,12 +52,13 @@ def start_recording(device_index, label) -> tuple[Thread, Path]:
                 with sounddevice.InputStream(
                     samplerate=samplerate, device=device_index, channels=1
                 ) as stream:
-                    console.log(f"Recording {label} -> {path}")
+                    console.log(f"Recording {label}: {path}")
                     while running:
                         data, _ = stream.read(1024)
                         file.write(data)
-        except Exception as exc:
-            console.log(f"Recording {label} failed: {exc}")
+        except Exception:
+            console.log(f"Recording {label} failed!")
+            console.print_exception()
 
     thread = Thread(target=_rec_thread, args=(path, device_index), daemon=True)
     thread.start()
@@ -70,35 +78,33 @@ def signal_handler(sig, frame):
     console.log("Stopping all recordings...")
 
 signal.signal(signal.SIGINT, signal_handler)
+def main() -> None:
+    for name, label in DEVICES_MAPPING:
+        index = get_device_index(name)
+        if index is not None:
+            proc, path = start_recording(index, label)
+            if proc:
+                procs.append(proc)
+                files.append(path)
+        else:
+            console.log(f"{name} not found, skipping...")
 
-mapping = [
-    ("Jabra", "mic-jabra"),
-    ("BlackHole", "blackhole"),
-    ("MacBook", "mic-macbook"),
-]
+    if not procs:
+        console.log("No recording processes started. Ensure devices are available.")
+        return
 
-for name, label in mapping:
-    idx = get_device_index(name)
-    if idx is not None:
-        p, path = start_recording(idx, label)
-        if p:
-            procs.append(p)
-            files.append(path)
-    else:
-        console.log(f"{name} not found, skipping...")
-
-if not procs:
-    console.log(
-        "No recording processes started. Ensure ffmpeg is installed and devices are available."
-    )
-else:
     console.log("Recording... Press Ctrl+C to stop.")
     try:
         while running:
             time.sleep(0.5)
     except KeyboardInterrupt:
-        running = False
+        # already handled by signal handler, but ensure flag is cleared
+        pass
     stop_all()
     console.log("All recordings finished.")
-    for f in files:
-        console.log(f)
+    for file in files:
+        console.log(file)
+
+
+if __name__ == "__main__":
+    main()
