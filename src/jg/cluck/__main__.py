@@ -28,37 +28,56 @@ def get_device_index(name) -> int | None:
     return None
 
 
+def _record_thread(
+    path: Path, device_index: int, stop_event: Event, label: str
+) -> None:
+    samplerate = 44100
+    try:
+        with soundfile.SoundFile(
+            path,
+            mode="w",
+            samplerate=samplerate,
+            channels=1,
+            format="FLAC",
+            subtype="PCM_16",
+        ) as file:
+            with sounddevice.InputStream(
+                samplerate=samplerate, device=device_index, channels=1
+            ) as stream:
+                console.log(f"Recording {label}: {path}")
+                while not stop_event.is_set():
+                    try:
+                        data, _ = stream.read(1024)
+                    except Exception as exc:
+                        if isinstance(exc, sounddevice.PortAudioError):
+                            console.log(
+                                f"Device for '{label}' disappeared; stopping this track."
+                            )
+                            break
+                        if isinstance(exc, OSError):
+                            console.log(
+                                f"Device for '{label}' reported OS error and disappeared; stopping this track."
+                            )
+                            break
+                        console.log(
+                            f"Recording {label} encountered unexpected error; stopping this track and showing traceback:"
+                        )
+                        console.print_exception()
+                        break
+                    file.write(data)
+    except Exception:
+        console.log(f"Recording {label} failed!")
+        console.print_exception()
+
+
 def start_recording(device_index, label, stop_event: Event) -> tuple[Thread, Path]:
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     outdir = Path.home() / "Downloads"
     outdir.mkdir(parents=True, exist_ok=True)
     filename = f"record-discord-{label}-{ts}.flac"
     path = outdir / filename
-
-    def _rec_thread(path: str, device_index: int, stop_event: Event):
-        samplerate = 44100
-        try:
-            with soundfile.SoundFile(
-                path,
-                mode="w",
-                samplerate=samplerate,
-                channels=1,
-                format="FLAC",
-                subtype="PCM_16",
-            ) as file:
-                with sounddevice.InputStream(
-                    samplerate=samplerate, device=device_index, channels=1
-                ) as stream:
-                    console.log(f"Recording {label}: {path}")
-                    while not stop_event.is_set():
-                        data, _ = stream.read(1024)
-                        file.write(data)
-        except Exception:
-            console.log(f"Recording {label} failed!")
-            console.print_exception()
-
     thread = Thread(
-        target=_rec_thread, args=(path, device_index, stop_event), daemon=True
+        target=_record_thread, args=(path, device_index, stop_event, label), daemon=True
     )
     thread.start()
     return thread, path
