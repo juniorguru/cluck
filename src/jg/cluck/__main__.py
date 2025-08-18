@@ -13,15 +13,30 @@ import sys
 console = Console()
 
 
+BT_HEADPHONES_NAMES = ["Jabra Elite Active"]
+
 DEVICES_MAPPING = [
-    ("Jabra Recording", "mic-jabra"),
-    ("BlackHole", "blackhole"),
-    ("MacBook", "mic-macbook"),
+    (
+        "Jabra Recording",
+        "mic-jabra",
+        [],
+    ),
+    (
+        "BlackHole",
+        "blackhole",
+        [],
+    ),
+    (
+        "MacBook",
+        "mic-macbook",
+        ["-use_wallclock_as_timestamps", "1"],
+    ),
 ]
 
 
 def _record_thread(
     ffmpeg_path: str,
+    ffmpeg_args: list[str],
     path: Path,
     device_index: int,
     stop_event: Event,
@@ -53,6 +68,7 @@ def _record_thread(
         "avfoundation",
         "-i",
         f":{device_index}",
+        *ffmpeg_args,
         "-map",
         "0:a",
         "-ac",
@@ -181,6 +197,7 @@ def find_device_index_by_name(
 
 def start_recording(
     ffmpeg_path: str,
+    ffmpeg_args: list[str],
     output_dir: Path,
     device_index: int,
     label: str,
@@ -195,7 +212,7 @@ def start_recording(
     path = output_dir / f"{label}.aac"
     thread = Thread(
         target=_record_thread,
-        args=(ffmpeg_path, path, device_index, stop_event, label),
+        args=(ffmpeg_path, ffmpeg_args, path, device_index, stop_event, label),
         daemon=True,
     )
     thread.start()
@@ -237,8 +254,13 @@ def main() -> None:
 
     raw_output = run_ffmpeg_list_devices(ffmpeg_path)
     ffmpeg_devices = parse_avfoundation_device_list(raw_output)
-    for name, index in ffmpeg_devices:
-        console.log(f"Found device: {name} (index: {index})")
+    console.log(
+        "Devices: " + ", ".join([f"{index} - {name}" for name, index in ffmpeg_devices])
+    )
+
+    for name in BT_HEADPHONES_NAMES:
+        if find_device_index_by_name(name, ffmpeg_devices) is not None:
+            raise RuntimeError(f"Start recording BEFORE connecting {name!r}")
 
     threads: list[Thread] = []
     paths: list[Path] = []
@@ -249,11 +271,11 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     console.log(f"Writing output to: {output_dir}")
 
-    for name, label in DEVICES_MAPPING:
+    for name, label, ffmpeg_args in DEVICES_MAPPING:
         device_index = find_device_index_by_name(name, ffmpeg_devices)
         if device_index is not None:
             thread, path = start_recording(
-                ffmpeg_path, output_dir, device_index, label, stop_event
+                ffmpeg_path, ffmpeg_args, output_dir, device_index, label, stop_event
             )
             if thread:
                 threads.append(thread)
