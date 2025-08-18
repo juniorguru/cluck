@@ -57,6 +57,8 @@ def _record_thread(
         f":{device_index}",
         "-map",
         "0:a",
+        "-ac",
+        "1",
         "-c:a",
         "aac",
         "-b:a",
@@ -235,6 +237,8 @@ def main() -> None:
 
     raw_output = run_ffmpeg_list_devices(ffmpeg_path)
     ffmpeg_devices = parse_avfoundation_device_list(raw_output)
+    for name, index in ffmpeg_devices:
+        console.log(f"Found device: {name} (index: {index})")
 
     threads: list[Thread] = []
     paths: list[Path] = []
