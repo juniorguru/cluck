@@ -14,7 +14,7 @@ console = Console()
 
 
 DEVICES_MAPPING = [
-    ("Jabra", "mic-jabra"),
+    ("Jabra Recording", "mic-jabra"),
     ("BlackHole", "blackhole"),
     ("MacBook", "mic-macbook"),
 ]
@@ -47,8 +47,6 @@ def _record_thread(
     ffmpeg_cmd = [
         ffmpeg_path,
         "-y",
-        "-thread_queue_size",
-        "4096",
         "-flush_packets",
         "1",
         "-f",
@@ -59,6 +57,8 @@ def _record_thread(
         "0:a",
         "-ac",
         "1",
+        "-ar",
+        "48000",
         "-c:a",
         "aac",
         "-b:a",
