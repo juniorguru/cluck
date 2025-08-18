@@ -19,3 +19,7 @@ Have Black Hole 2ch installed. Create:
 If you start speaking too soon after the start of recording, ffmpeg starts recording before the BT profile settles, and the whole recording of BT speakers is unusable crap, just scratching sounds.
 
 If you start recording before you connect the headphones, all is good. That's why this program forces you to first start recording, and only then connect the BT headphones.
+
+## MacBook Air Mic clicking
+
+Probably impossible to tackle, maybe through BlackHole. The mic isn't optimized for realtime audio saving.

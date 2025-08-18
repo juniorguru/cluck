@@ -19,17 +19,17 @@ DEVICES_MAPPING = [
     (
         "Jabra Recording",
         "mic-jabra",
-        [],
+        ["-ar", "48000"],
     ),
     (
         "BlackHole",
         "blackhole",
-        [],
+        ["-ar", "48000"],
     ),
     (
         "MacBook",
         "mic-macbook",
-        ["-use_wallclock_as_timestamps", "1"],
+        ["-ar", "44100", "-use_wallclock_as_timestamps", "1"],
     ),
 ]
 
@@ -56,7 +56,7 @@ def _record_thread(
     - stop_event: Event used to request recorder shutdown.
     - label: short label used for logging.
     """
-    out_aac = str(path.with_suffix(".aac"))
+    out_path = str(path.with_suffix(".aac"))
     log_path = str(path.with_suffix(".ffmpeg.log"))
 
     ffmpeg_cmd = [
@@ -66,6 +66,8 @@ def _record_thread(
         "1",
         "-f",
         "avfoundation",
+        "-thread_queue_size",
+        "2048",
         "-i",
         f":{device_index}",
         *ffmpeg_args,
@@ -73,15 +75,11 @@ def _record_thread(
         "0:a",
         "-ac",
         "1",
-        "-ar",
-        "48000",
         "-c:a",
-        "aac",
-        "-b:a",
-        "128k",
+        "libfdk_aac",
         "-f",
         "adts",
-        out_aac,
+        out_path,
     ]
     console.log(" ".join(ffmpeg_cmd))
 
@@ -138,7 +136,7 @@ def _record_thread(
 
     try:
         log_path = Path(log_path)
-        final_path = Path(out_aac)
+        final_path = Path(out_path)
         console.log(f"Recording finished: {final_path} (log: {log_path})")
     except Exception:
         console.print_exception()
